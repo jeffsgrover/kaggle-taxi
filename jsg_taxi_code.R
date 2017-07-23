@@ -3,10 +3,12 @@
 # Preamble
 cd <- "/Users/jeffgrover/Documents/Data Science/Kaggle/Taxi Trip Duration/"
 setwd(cd)
+library(data.table)
 library(tidyverse)
 library(lubridate)
 library(geosphere)
 library(maptools)
+library(rworldmap)
 
 # Importing data
 train <- fread("train.csv")
@@ -23,19 +25,102 @@ train <- fread("train.csv")
 # store_and_fwd_flag - This flag indicates whether the trip record was held in vehicle memory before sending to the vendor because the vehicle did not have a connection to the server - Y=store and forward; N=not a store and forward trip
 # trip_duration - duration of the trip in seconds
 
+#################
+# Data Cleaning #
+#################
 
-# Data Cleaning
-train <- mutate_at(train, c("pickup_datetime", "dropoff_datetime"), as_datetime)
+#train <- mutate_at(train, c("pickup_datetime", "dropoff_datetime"), as_datetime)
+## Wait, why are so many of the pickup and dropoff datetimes equal? Fix this.
 train <- mutate_at(train, "vendor_id", as.factor)
-## Create distance variable
+
+# Create distance variable using the geosphere package
 train$dist <- distHaversine(cbind(train$pickup_longitude, train$pickup_latitude),
                              cbind(train$dropoff_longitude, train$dropoff_latitude))
-# Convert to kilometers
-train$dist <- train$dist/1000
+# Comes out as meters. Convert to miles
+train$dist <- train$dist*0.000621371
 
-# Exploratory Analysis
-dur <- ggplot(train, aes(x=trip_duration))
-dur + geom_density()
+# Create trip duration in minutes and hours
+train$trip_duration_min <- train$trip_duration/60
+train$trip_duration_hr <- train$trip_duration_min/60
 
-## An outlier is screwing things up. Let's look at observations below 10,000
-dur_trimmed <- ggplot(subset(train, trip_duration<10000), aes(x=trip_duration))
+# Create miles traveled per hour
+train$mph <- train$dist/train$trip_duration_hr
+
+########################
+# Exploratory Analysis #
+########################
+
+# Let's plot stuff.
+
+## Let's start with passenger count.
+qplot(y=train$passenger_count, x=1, geom="boxplot")
+## How many observations have zero passengers? Those can't be right.
+sum(train$passenger_count==0)
+## 60. Guess we're not keeping those. 
+## Let's keep looking before we remove anything.
+
+## Now, trip duration.
+qplot(x=train$trip_duration_hr, geom="density")
+## No way people are spending upwards of 900 hours in a cab. 
+## What are the longest cab rides?
+train %>% select (trip_duration_hr) %>% 
+      arrange(desc(trip_duration_hr)) %>% 
+      head(20)
+## Four cab rides are over three weeks long. Guess we're not keeping those either.
+## What about the other weirdly long cab rides?
+train_longride <- filter(train, trip_duration_hr>2 & trip_duration_hr<24)
+qplot(x=train_longride$trip_duration_hr, geom="density")
+## There seems to be a weird spike around 24 hours. 
+## I've never taken a cab in NYC but that can't be right.
+## How far were they traveling?
+with(train_longride, qplot(x=trip_duration_hr, y=dist))
+## No way they were taking a whole day to go 20 miles...
+## Some of these durations are too short, too.
+train_shortride <- filter(train, trip_duration_min<15)
+qplot(x=train_shortride$trip_duration_min, geom="density")
+## What are some of the shortest?
+train %>% select(id, trip_duration, pickup_datetime, dropoff_datetime, dist) %>%
+      arrange(trip_duration) %>%
+      head(20)
+## One-second cab rides?
+sum(train$trip_duration==1)
+## 33 of those. For some, the datetimes corroborate the 1-second story, so we can't recover the actual trip durations.
+## Let's keep looking.
+
+## How far were these train rides?
+qplot(x=train$dist, geom="density")
+## Nope. What are the outliers?
+train %>% select(mph) %>% 
+      arrange(desc(mph)) %>% 
+      head(20)
+## There's got to be a limit to how far these are before they're not even in NYC anymore.
+## Maybe the coordinates are messed up? Take a look; there are only 13 trips over 100 miles.
+train_longdist <- filter(train, dist>100) 
+qplot(data=train_longdist, x=pickup_longitude, y=pickup_latitude)
+map <- getMap(resolution="low")
+plot(map, xlim=c(-76,-65), ylim=c(33,52))
+points(train_longdist$pickup_longitude, train_longdist$pickup_latitude, pch=16)
+axis(1)
+axis(2)
+## Okay, no one is getting picked up in the Atlantic Ocean or Montreal.
+points(train_longdist$dropoff_longitude, train_longdist$dropoff_latitude, pch=16, col="red")
+## And no one is getting dropped off in western Pennsylvania. 
+## We'll be dropping these too.
+
+## Now let's look at how fast the drivers were going.
+qplot(x=train$mph, geom="density")
+## Look at the craziest ones.
+train %>% select(id, trip_duration_min, dist, mph) %>% 
+      arrange(desc(mph)) %>%
+      head(150)
+## No way these duration-distance combos are correct.
+
+## Let's re-plot without some of the super crazy speeds.
+train_notsofast <- filter(train, mph<100)
+qplot(data=train_notsofast, x=mph, geom="density")
+
+## There's a spike at zero speed, too. How many had no speed?
+sum(train$mph==0)
+## Almost 6,000! Is it lack of distance traveled?
+sum(train$mph==0 & train$dist==0)
+## Yup.
