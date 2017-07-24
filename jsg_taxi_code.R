@@ -30,8 +30,13 @@ train <- fread("train.csv")
 # Data Cleaning #
 #################
 train <- train_original
-train <- mutate(train, pickup_datetime = as_datetime(pickup_datetime, tz="New York City"))
-## Wait, why are so many of the pickup and dropoff datetimes equal? Fix this.
+train_datetest <- train[1:10,]
+train_datetest <- mutate(train_datetest, pickup_datetime = ymd_hms(pickup_datetime, tz="EST"))
+train <- mutate(train, pickup_datetime = ymd_hms(pickup_datetime, tz="EST"))
+train <- mutate(train, dropoff_datetime = ymd_hms(dropoff_datetime, tz="EST"))
+#train$pickuptime <- paste(hour(train$pickup_datetime), minute(train$pickup_datetime), second(train$pickup_datetime))
+#train$dropofftime <- paste(hour(train$dropoff_datetime), minute(train$dropoff_datetime), second(train$dropoff_datetime))
+## These aren't working. Keep looking up how to extract time of day from datetime
 train <- mutate_at(train, "vendor_id", as.factor)
 
 # Create distance variable using the geosphere package
@@ -83,6 +88,18 @@ train_24hr %>% select(id, pickup_datetime, dropoff_datetime, dist, trip_duration
       arrange(trip_duration_hr) %>% 
       head(20)
 ## So it looks like several ended exactly at midnight, down to the second. Probably just an error.
+## How many of these end at exactly midnight?
+train %>% select(id, pickup_datetime, dropoff_datetime, dist, trip_duration_hr, mph) %>%
+      filter(hour(dropoff_datetime)==0 & minute(dropoff_datetime)==0 & second(dropoff_datetime)==0) %>%
+      arrange(desc(trip_duration_hr)) %>%
+      dim()
+## 224. Loo
+train_under24 <- filter(train, trip_duration_hr<24)
+train
+qplot(x=hour(train_under24$dropoff_datetime), y=train_under24$trip_duration_hr)
+qplot(x=)
+## Wow. Lots of 
+
 ## Some of these durations are too short, too.
 train_shortride <- filter(train, trip_duration_min<15)
 qplot(x=train_shortride$trip_duration_min, geom="density")
